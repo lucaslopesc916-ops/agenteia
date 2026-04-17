@@ -1,0 +1,163 @@
+// Winner.AI — Prisma Schema
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  plan      String   @default("starter")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  users         User[]
+  agents        Agent[]
+  contacts      Contact[]
+  credits       Credit[]
+  schedules     Schedule[]
+
+  @@map("tenants")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  tenantId  String   @map("tenant_id")
+  email     String   @unique
+  role      String   @default("member")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("users")
+}
+
+model Agent {
+  id           String   @id @default(cuid())
+  tenantId     String   @map("tenant_id")
+  name         String
+  avatarUrl    String?  @map("avatar_url")
+  model        String   @default("gpt-4o-mini")
+  tone         String   @default("professional")
+  systemPrompt String?  @map("system_prompt") @db.Text
+  behavior     Json?
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trainings     Training[]
+  channels      Channel[]
+  conversations Conversation[]
+  schedules     Schedule[]
+
+  @@map("agents")
+}
+
+model Training {
+  id        String   @id @default(cuid())
+  agentId   String   @map("agent_id")
+  type      String
+  title     String
+  content   String?  @db.Text
+  sourceUrl String?  @map("source_url")
+  status    String   @default("processing")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@map("trainings")
+}
+
+model Channel {
+  id          String   @id @default(cuid())
+  agentId     String   @map("agent_id")
+  type        String
+  credentials Json?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  agent         Agent          @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  @@map("channels")
+}
+
+model Contact {
+  id        String   @id @default(cuid())
+  tenantId  String   @map("tenant_id")
+  phone     String?
+  name      String?
+  source    String?
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+  schedules     Schedule[]
+
+  @@map("contacts")
+}
+
+model Conversation {
+  id        String   @id @default(cuid())
+  agentId   String   @map("agent_id")
+  contactId String   @map("contact_id")
+  channelId String?  @map("channel_id")
+  status    String   @default("open")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  agent    Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  contact  Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  channel  Channel?  @relation(fields: [channelId], references: [id])
+  messages Message[]
+
+  @@map("conversations")
+}
+
+model Message {
+  id             String   @id @default(cuid())
+  conversationId String   @map("conversation_id")
+  role           String
+  content        String   @db.Text
+  tokensUsed     Int?     @map("tokens_used")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@map("messages")
+}
+
+model Schedule {
+  id        String   @id @default(cuid())
+  tenantId  String   @map("tenant_id")
+  contactId String   @map("contact_id")
+  agentId   String   @map("agent_id")
+  datetime  DateTime
+  status    String   @default("pending")
+  notes     String?  @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  agent   Agent   @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@map("schedules")
+}
+
+model Credit {
+  id        String   @id @default(cuid())
+  tenantId  String   @map("tenant_id")
+  amount    Int
+  type      String
+  note      String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("credits")
+}
