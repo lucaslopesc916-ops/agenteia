@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { createClient } from "@/lib/supabase/server";
-import { connectInstance, checkServer, updateWebhook } from "@/lib/stevo";
+import { connectInstance, getInstanceStatus } from "@/lib/stevo";
 
 async function getTenantId() {
   const supabase = await createClient();
@@ -23,17 +23,13 @@ export async function GET() {
   }
 
   try {
-    const server = await checkServer();
-    const instance = await connectInstance();
-
+    const status = await getInstanceStatus();
     return NextResponse.json({
-      serverOk: server?.status === "ok",
-      connected: instance?.message === "success",
-      jid: instance?.data?.jid || null,
-      phone: instance?.data?.jid?.split("@")[0] || null,
+      connected: status?.data?.Connected && status?.data?.LoggedIn,
+      name: status?.data?.Name || null,
     });
   } catch {
-    return NextResponse.json({ serverOk: false, connected: false });
+    return NextResponse.json({ connected: false });
   }
 }
 
@@ -49,7 +45,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "agentId is required" }, { status: 400 });
   }
 
-  // Verify agent belongs to tenant
   const { data: agent } = await supabaseAdmin
     .from("agents")
     .select("id")
@@ -61,18 +56,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Agent not found" }, { status: 404 });
   }
 
-  // Check Stevo connection
-  const instance = await connectInstance();
+  // Connect instance with webhook
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  const webhookUrl = `${appUrl}/api/webhook/stevo`;
+  const instance = await connectInstance(webhookUrl);
+
   if (instance?.message !== "success") {
     return NextResponse.json({ error: "Stevo instance not connected" }, { status: 502 });
   }
 
   const phone = instance.data?.jid?.split("@")[0] || null;
-
-  // Configure webhook to point to our endpoint
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-  const webhookUrl = `${appUrl}/api/webhook/stevo`;
-  await updateWebhook(webhookUrl);
 
   // Upsert channel record
   const { data: existingChannel } = await supabaseAdmin
@@ -88,12 +81,7 @@ export async function POST(request: Request) {
       .from("channels")
       .update({
         active: true,
-        credentials: {
-          provider: "stevo",
-          instanceName: process.env.STEVO_INSTANCE_NAME,
-          phone,
-          webhookUrl,
-        },
+        credentials: { provider: "stevo", phone, webhookUrl },
       })
       .eq("id", existingChannel.id)
       .select()
@@ -106,12 +94,7 @@ export async function POST(request: Request) {
         agent_id: agentId,
         type: "whatsapp",
         active: true,
-        credentials: {
-          provider: "stevo",
-          instanceName: process.env.STEVO_INSTANCE_NAME,
-          phone,
-          webhookUrl,
-        },
+        credentials: { provider: "stevo", phone, webhookUrl },
       })
       .select()
       .single();
@@ -148,7 +131,7 @@ export async function DELETE(request: Request) {
     .eq("type", "whatsapp");
 
   // Remove webhook
-  await updateWebhook("");
+  await connectInstance("");
 
   return NextResponse.json({ disconnected: true });
 }
