@@ -9,33 +9,67 @@ export async function POST(request: Request) {
   try {
     const payload = await request.json();
 
-    // Stevo sends different event types — we only care about incoming messages
-    const event = payload.event || payload.type;
-    if (event !== "MESSAGE" && event !== "messages.upsert") {
-      return NextResponse.json({ status: "ignored", event });
+    // Log raw payload for debugging
+    console.log("WEBHOOK RAW:", JSON.stringify(payload).slice(0, 2000));
+
+    // Extract event type - Stevo v2 format
+    const event = payload.event || payload.type || payload.Event || "";
+
+    // Extract message data - try multiple formats
+    const data = payload.data || payload.Data || payload;
+    const info = data.Info || data.info || {};
+    const message = data.Message || data.message || {};
+    const msgContext = data.MessageContextInfo || {};
+
+    // Try to get remote JID and text from different structures
+    let remoteJid = "";
+    let fromMe = false;
+    let messageText = "";
+    let pushName = "";
+
+    // Stevo v2 format: Info.Chat, Info.IsFromMe, Message.conversation or Message.extendedTextMessage.text
+    if (info.Chat) {
+      remoteJid = info.Chat;
+      fromMe = info.IsFromMe || false;
+      pushName = info.PushName || data.PushName || "";
+      messageText =
+        message.conversation ||
+        message.extendedTextMessage?.text ||
+        "";
     }
 
-    const messageData = payload.data || payload;
-    const remoteJid = messageData.key?.remoteJid || messageData.remoteJid;
-    const fromMe = messageData.key?.fromMe ?? false;
-    const messageText =
-      messageData.message?.conversation ||
-      messageData.message?.extendedTextMessage?.text ||
-      messageData.body ||
-      messageData.text;
-
-    // Ignore messages sent by us or without text
-    if (fromMe || !messageText || !remoteJid) {
-      return NextResponse.json({ status: "ignored", reason: "fromMe or no text" });
+    // Evolution API format: key.remoteJid, key.fromMe
+    if (!remoteJid && data.key) {
+      remoteJid = data.key.remoteJid || "";
+      fromMe = data.key.fromMe || false;
+      pushName = data.pushName || data.senderName || "";
+      const msg = data.message || {};
+      messageText =
+        msg.conversation ||
+        msg.extendedTextMessage?.text ||
+        data.body ||
+        data.text ||
+        "";
     }
 
-    // Extract phone number from JID
+    // Fallback
+    if (!remoteJid) {
+      remoteJid = data.remoteJid || data.jid || "";
+      messageText = data.body || data.text || data.content || "";
+    }
+
+    console.log("PARSED:", { event, remoteJid, fromMe, messageText: messageText?.slice(0, 100), pushName });
+
+    // Ignore: no text, from me, groups, or non-message events
+    if (!messageText || fromMe || !remoteJid || remoteJid.includes("@g.us")) {
+      return NextResponse.json({
+        status: "ignored",
+        reason: !messageText ? "no_text" : fromMe ? "from_me" : !remoteJid ? "no_jid" : "group",
+        event,
+      });
+    }
+
     const phone = remoteJid.split("@")[0];
-
-    // Ignore group messages
-    if (remoteJid.includes("@g.us")) {
-      return NextResponse.json({ status: "ignored_group" });
-    }
 
     // Find active WhatsApp channel
     const { data: channel, error: channelError } = await supabaseAdmin
@@ -47,18 +81,19 @@ export async function POST(request: Request) {
       .single();
 
     if (channelError || !channel) {
-      return NextResponse.json({ error: "No active WhatsApp channel", detail: channelError?.message }, { status: 404 });
+      console.log("No active WhatsApp channel:", channelError?.message);
+      return NextResponse.json({ error: "No active channel" }, { status: 404 });
     }
 
-    // Fetch the agent separately
-    const { data: agent, error: agentError } = await supabaseAdmin
+    // Fetch agent
+    const { data: agent } = await supabaseAdmin
       .from("agents")
       .select("id, name, model, system_prompt, tenant_id")
       .eq("id", channel.agent_id)
       .single();
 
-    if (agentError || !agent) {
-      return NextResponse.json({ error: "Agent not found", detail: agentError?.message }, { status: 404 });
+    if (!agent) {
+      return NextResponse.json({ error: "Agent not found" }, { status: 404 });
     }
 
     // Find or create contact
@@ -70,23 +105,22 @@ export async function POST(request: Request) {
       .single();
 
     if (!contact) {
-      const pushName = messageData.pushName || messageData.senderName || null;
-      const { data: newContact, error: contactError } = await supabaseAdmin
+      const { data: newContact } = await supabaseAdmin
         .from("contacts")
         .insert({
           id: createId(),
           tenant_id: agent.tenant_id,
           phone,
-          name: pushName,
+          name: pushName || null,
           source: "whatsapp",
         })
         .select()
         .single();
-
-      if (contactError) {
-        return NextResponse.json({ error: "Failed to create contact", detail: contactError.message }, { status: 500 });
-      }
       contact = newContact;
+    }
+
+    if (!contact) {
+      return NextResponse.json({ error: "Failed to create contact" }, { status: 500 });
     }
 
     // Find or create conversation
@@ -94,34 +128,34 @@ export async function POST(request: Request) {
       .from("conversations")
       .select("*")
       .eq("agent_id", agent.id)
-      .eq("contact_id", contact!.id)
+      .eq("contact_id", contact.id)
       .eq("channel_id", channel.id)
       .eq("status", "open")
       .single();
 
     if (!conversation) {
-      const { data: newConv, error: convError } = await supabaseAdmin
+      const { data: newConv } = await supabaseAdmin
         .from("conversations")
         .insert({
           id: createId(),
           agent_id: agent.id,
-          contact_id: contact!.id,
+          contact_id: contact.id,
           channel_id: channel.id,
           status: "open",
         })
         .select()
         .single();
-
-      if (convError) {
-        return NextResponse.json({ error: "Failed to create conversation", detail: convError.message }, { status: 500 });
-      }
       conversation = newConv;
+    }
+
+    if (!conversation) {
+      return NextResponse.json({ error: "Failed to create conversation" }, { status: 500 });
     }
 
     // Save incoming message
     await supabaseAdmin.from("messages").insert({
       id: createId(),
-      conversation_id: conversation!.id,
+      conversation_id: conversation.id,
       role: "user",
       content: messageText,
     });
@@ -130,7 +164,7 @@ export async function POST(request: Request) {
     const { data: history } = await supabaseAdmin
       .from("messages")
       .select("role, content")
-      .eq("conversation_id", conversation!.id)
+      .eq("conversation_id", conversation.id)
       .order("created_at", { ascending: true })
       .limit(20);
 
@@ -151,19 +185,22 @@ export async function POST(request: Request) {
       chatMessages
     );
 
+    console.log("AI REPLY:", reply.slice(0, 200));
+
     // Save assistant response
     await supabaseAdmin.from("messages").insert({
       id: createId(),
-      conversation_id: conversation!.id,
+      conversation_id: conversation.id,
       role: "assistant",
       content: reply,
       tokens_used: tokensUsed,
     });
 
     // Send reply via Stevo WhatsApp
-    await sendText(phone, reply);
+    const sendResult = await sendText(phone, reply);
+    console.log("SEND RESULT:", JSON.stringify(sendResult).slice(0, 500));
 
-    return NextResponse.json({ status: "ok" });
+    return NextResponse.json({ status: "ok", sent: true });
   } catch (err) {
     console.error("Webhook error:", err);
     const message = err instanceof Error ? err.message : "Unknown error";
