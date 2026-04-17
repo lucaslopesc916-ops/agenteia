@@ -1,14 +1,77 @@
 "use client";
 
-import { Bot, Upload } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { useParams } from "next/navigation";
+import { Bot, Upload, Loader2, Check } from "lucide-react";
+
+interface Agent {
+  id: string;
+  name: string;
+  model: string;
+  tone: string;
+  system_prompt: string;
+  avatar_url: string | null;
+}
 
 export default function AgentProfilePage() {
+  const { id } = useParams<{ id: string }>();
+  const [agent, setAgent] = useState<Agent | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const [name, setName] = useState("");
+  const [model, setModel] = useState("gpt-4o-mini");
+  const [tone, setTone] = useState("professional");
+  const [systemPrompt, setSystemPrompt] = useState("");
+
+  const loadAgent = useCallback(async () => {
+    const res = await fetch(`/api/agents/${id}`);
+    if (res.ok) {
+      const data = await res.json();
+      setAgent(data);
+      setName(data.name || "");
+      setModel(data.model || "gpt-4o-mini");
+      setTone(data.tone || "professional");
+      setSystemPrompt(data.system_prompt || "");
+    }
+    setLoading(false);
+  }, [id]);
+
+  useEffect(() => {
+    loadAgent();
+  }, [loadAgent]);
+
+  async function handleSave() {
+    setSaving(true);
+    setSaved(false);
+    const res = await fetch(`/api/agents/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, model, tone, systemPrompt }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setAgent(data);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    }
+    setSaving(false);
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="animate-spin text-[#7C3AED]" size={24} />
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-2xl space-y-6">
       <div className="bg-white rounded-xl border border-[#E5E7EB] p-6">
         <h2 className="text-sm font-semibold text-[#111827] mb-4">Dados do Agente</h2>
 
-        {/* Avatar */}
         <div className="flex items-center gap-4 mb-6">
           <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-[#7C3AED] to-[#0D9488] flex items-center justify-center text-white">
             <Bot size={28} />
@@ -29,7 +92,8 @@ export default function AgentProfilePage() {
             </label>
             <input
               type="text"
-              defaultValue="Atendente Geral"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
               className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED] transition-colors"
             />
           </div>
@@ -38,7 +102,11 @@ export default function AgentProfilePage() {
             <label className="block text-xs font-medium text-[#374151] mb-1.5">
               Modelo de IA
             </label>
-            <select className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED] transition-colors bg-white">
+            <select
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED] transition-colors bg-white"
+            >
               <optgroup label="OpenAI">
                 <option value="gpt-4o-mini">GPT-4o Mini (rápido e econômico)</option>
                 <option value="gpt-4o">GPT-4o (mais capaz)</option>
@@ -54,12 +122,16 @@ export default function AgentProfilePage() {
             <label className="block text-xs font-medium text-[#374151] mb-1.5">
               Tom de voz
             </label>
-            <select className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED] transition-colors bg-white">
-              <option>Profissional</option>
-              <option>Amigável e informal</option>
-              <option>Técnico</option>
-              <option>Persuasivo (vendas)</option>
-              <option>Empático (suporte)</option>
+            <select
+              value={tone}
+              onChange={(e) => setTone(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED] transition-colors bg-white"
+            >
+              <option value="professional">Profissional</option>
+              <option value="friendly">Amigável e informal</option>
+              <option value="technical">Técnico</option>
+              <option value="sales">Persuasivo (vendas)</option>
+              <option value="support">Empático (suporte)</option>
             </select>
           </div>
         </div>
@@ -71,24 +143,26 @@ export default function AgentProfilePage() {
           Defina a personalidade, regras e objetivos do agente.
         </p>
         <textarea
-          rows={8}
-          defaultValue={`Você é um assistente de atendimento ao cliente da [Nome da Empresa]. Seu objetivo é ajudar os clientes com dúvidas, informações sobre produtos e resolver problemas de forma eficiente e cordial.
-
-Regras:
-- Sempre seja educado e profissional
-- Responda de forma clara e objetiva
-- Caso não saiba a resposta, diga que vai verificar e encaminhe para um humano
-- Nunca invente informações`}
+          rows={10}
+          value={systemPrompt}
+          onChange={(e) => setSystemPrompt(e.target.value)}
+          placeholder="Ex: Você é um assistente de vendas..."
           className="w-full px-3 py-2 text-sm border border-[#E5E7EB] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#7C3AED]/20 focus:border-[#7C3AED] transition-colors resize-none font-mono"
         />
       </div>
 
       <div className="flex items-center gap-3">
-        <button className="px-5 py-2 bg-[#7C3AED] hover:bg-[#6D28D9] text-white text-sm font-medium rounded-lg transition-colors">
-          Salvar alterações
-        </button>
-        <button className="px-5 py-2 border border-[#E5E7EB] text-[#6B7280] text-sm font-medium rounded-lg hover:bg-[#F9FAFB] transition-colors">
-          Cancelar
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="flex items-center gap-2 px-5 py-2 bg-[#7C3AED] hover:bg-[#6D28D9] disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+        >
+          {saving ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : saved ? (
+            <Check size={14} />
+          ) : null}
+          {saving ? "Salvando..." : saved ? "Salvo!" : "Salvar alterações"}
         </button>
       </div>
     </div>
