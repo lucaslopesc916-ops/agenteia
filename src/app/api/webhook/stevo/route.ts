@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { sendText } from "@/lib/stevo";
 import { chat } from "@/lib/ai";
+import { createId } from "@paralleldrive/cuid2";
 
 // POST /api/webhook/stevo — receives messages from Stevo/WhatsApp
 export async function POST(request: Request) {
@@ -73,6 +74,7 @@ export async function POST(request: Request) {
       const { data: newContact, error: contactError } = await supabaseAdmin
         .from("contacts")
         .insert({
+          id: createId(),
           tenant_id: agent.tenant_id,
           phone,
           name: pushName,
@@ -101,6 +103,7 @@ export async function POST(request: Request) {
       const { data: newConv, error: convError } = await supabaseAdmin
         .from("conversations")
         .insert({
+          id: createId(),
           agent_id: agent.id,
           contact_id: contact!.id,
           channel_id: channel.id,
@@ -117,6 +120,7 @@ export async function POST(request: Request) {
 
     // Save incoming message
     await supabaseAdmin.from("messages").insert({
+      id: createId(),
       conversation_id: conversation!.id,
       role: "user",
       content: messageText,
@@ -149,6 +153,7 @@ export async function POST(request: Request) {
 
     // Save assistant response
     await supabaseAdmin.from("messages").insert({
+      id: createId(),
       conversation_id: conversation!.id,
       role: "assistant",
       content: reply,
